@@ -30,3 +30,5 @@ export default function Home() {
   );
 }
 // AIA deployment webhook test
+
+const aiaTest: string = 123;
