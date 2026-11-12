@@ -1,0 +1,57 @@
+name: Send Vercel deployment failures to AIA
+
+on:
+  repository_dispatch:
+    types:
+      - vercel.deployment.error
+      - vercel.deployment.failed
+      - vercel.deployment.canceled
+
+jobs:
+  notify-aia:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Forward deployment event to AIA
+        env:
+          AIA_WEBHOOK_URL: ${{ secrets.AIA_WEBHOOK_URL }}
+          AIA_WEBHOOK_TOKEN: ${{ secrets.AIA_WEBHOOK_TOKEN }}
+          VERCEL_ACTION: ${{ github.event.action }}
+          VERCEL_PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          data = json.loads(os.environ["VERCEL_PAYLOAD"])
+          event_type = os.environ["VERCEL_ACTION"].replace("vercel.", "", 1)
+
+          body = {
+              "id": data.get("id"),
+              "type": event_type,
+              "payload": {
+                  "deployment": {
+                      "id": data.get("id"),
+                      "url": data.get("url"),
+                      "environment": data.get("environment"),
+                  },
+                  "project": data.get("project") or {},
+                  "repository": {"full_name": os.environ["GITHUB_REPOSITORY"]},
+                  "errorMessage": data.get("error"),
+                  "git": data.get("git") or {},
+              },
+          }
+
+          request = urllib.request.Request(
+              os.environ["AIA_WEBHOOK_URL"],
+              data=json.dumps(body).encode("utf-8"),
+              headers={
+                  "Authorization": "Bearer " + os.environ["AIA_WEBHOOK_TOKEN"],
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              print("AIA response:", response.status, response.read().decode("utf-8"))
+          PY
