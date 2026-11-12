@@ -1,22 +1,18 @@
 name: Send Vercel deployment failures to AIA
 
 on:
-  repository_dispatch:
-    types:
-      - vercel.deployment.error
-      - vercel.deployment.failed
-      - vercel.deployment.canceled
+  deployment_status:
 
 jobs:
   notify-aia:
+    if: github.event.deployment_status.state == 'failure' || github.event.deployment_status.state == 'error'
     runs-on: ubuntu-latest
     steps:
-      - name: Forward deployment event to AIA
+      - name: Forward deployment failure to AIA
         env:
           AIA_WEBHOOK_URL: ${{ secrets.AIA_WEBHOOK_URL }}
           AIA_WEBHOOK_TOKEN: ${{ secrets.AIA_WEBHOOK_TOKEN }}
-          VERCEL_ACTION: ${{ github.event.action }}
-          VERCEL_PAYLOAD: ${{ toJSON(github.event.client_payload) }}
+          GITHUB_EVENT: ${{ toJSON(github.event) }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           python - <<'PY'
@@ -24,22 +20,26 @@ jobs:
           import os
           import urllib.request
 
-          data = json.loads(os.environ["VERCEL_PAYLOAD"])
-          event_type = os.environ["VERCEL_ACTION"].replace("vercel.", "", 1)
+          event = json.loads(os.environ["GITHUB_EVENT"])
+          status = event["deployment_status"]
+          deployment = event["deployment"]
 
           body = {
-              "id": data.get("id"),
-              "type": event_type,
+              "id": str(status.get("id") or deployment.get("id")),
+              "type": "deployment.error",
               "payload": {
                   "deployment": {
-                      "id": data.get("id"),
-                      "url": data.get("url"),
-                      "environment": data.get("environment"),
+                      "id": deployment.get("id"),
+                      "url": status.get("environment_url") or status.get("target_url"),
+                      "environment": deployment.get("environment"),
                   },
-                  "project": data.get("project") or {},
+                  "project": {},
                   "repository": {"full_name": os.environ["GITHUB_REPOSITORY"]},
-                  "errorMessage": data.get("error"),
-                  "git": data.get("git") or {},
+                  "errorMessage": status.get("description") or status.get("state"),
+                  "git": {
+                      "ref": deployment.get("ref"),
+                      "sha": deployment.get("sha"),
+                  },
               },
           }
 
